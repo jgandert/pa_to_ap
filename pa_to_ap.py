@@ -14,6 +14,7 @@ from matcher import ObjectListMatcher
 
 CUR_PATH = Path()
 
+TRANSFER_DOWNLOADED_EPISODES = True
 EPISODES_DIR_PATH = '/storage/emulated/0/Android/data/de.danoeh.antennapod/files/media/from_podcast_addict'
 MATCH_ON_EPISODE_URL_IF_COULD_NOT_FIND_A_MATCH_OTHERWISE = True
 
@@ -208,7 +209,7 @@ def transfer_from_feed_to_feed(podcast_addict_cur: Cursor,  #
                 "INSERT INTO Favorites (feeditem, feed) VALUES "
                 "(?, ?)", (ap_ep[0], ap.id))
 
-        if pa_ep[4]:
+        if pa_ep[4] and TRANSFER_DOWNLOADED_EPISODES:
             transfer_from_dld_ep_to_ep(antenna_pod_cur, podcast_addict_cur,  #
                                        pa_ep, ap_ep, pa.folder_name)
 

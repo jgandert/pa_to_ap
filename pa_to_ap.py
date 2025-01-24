@@ -3,7 +3,8 @@
 import sys
 import zipfile
 import sqlite3
-from dataclasses import dataclass
+import functools
+from dataclasses import dataclass, field
 from operator import itemgetter
 from pathlib import Path
 from sqlite3 import Cursor
@@ -18,6 +19,7 @@ TRANSFER_DOWNLOADED_EPISODES = True
 EPISODES_DIR_PATH = '/storage/emulated/0/Android/data/de.danoeh.antennapod/files/media/from_podcast_addict'
 MATCH_ON_EPISODE_URL_IF_COULD_NOT_FIND_A_MATCH_OTHERWISE = True
 
+AP_TAG_SEPARATOR = "\u001e" # Separator character for AP tag column blob
 
 @dataclass
 class Feed:
@@ -27,8 +29,31 @@ class Feed:
     author: str
     keep_updated: int
     feed_url: str
-    folder_name: str = ''
 
+@dataclass
+class PAFeed(Feed):
+    tag: int # Tag for single row from JOIN
+    tags: list[int] = field(default_factory=list, init=False) # For merged PAFeed rows this will contain all tags
+    folder_name: str
+
+    def tag_names(self, pa_tags: dict[int, str]):
+        return [pa_tags[x] for x in self.tags]
+
+@dataclass
+class APFeed(Feed):
+    _tags: str
+
+    @property
+    def tags_str(self):
+        return self._tags
+
+    @property
+    def tags(self):
+        return self._tags.split(AP_TAG_SEPARATOR) if self._tags is not None else list()
+
+    @tags.setter
+    def tags(self, value: list[str]):
+        self._tags = AP_TAG_SEPARATOR.join(value)
 
 def error(msg):
     print("ERROR:", msg)
@@ -75,19 +100,36 @@ def get_antenna_pod_and_podcast_addict_backup_path():
 
 
 def transfer(podcast_addict_cur: Cursor, antenna_pod_cur: Cursor):
-    # first find match for all feeds in pa
-    pa_feeds = [Feed(*a) for a in podcast_addict_cur.execute(
-            'select _id, name, description, author, '
-            'automaticRefresh, feed_url, folderName from podcasts '
-            'where subscribed_status = 1 and is_virtual = 0 and initialized_status = 1')]
+    # first find match for all feeds in pa, left join on tags relation table (so there may be multiple rows for each podcast)
+    pa_feeds_one_to_many_tags = [PAFeed(*a) for a in podcast_addict_cur.execute(
+            'SELECT podcasts._id, podcasts.name, description, author, '
+            'automaticRefresh, feed_url, tag_relation.tag_id, folderName FROM podcasts '
+            'LEFT JOIN tag_relation ON tag_relation.podcast_id = podcasts._id '
+            'WHERE subscribed_status = 1 AND is_virtual = 0 AND initialized_status = 1')]
+
+    # Collate multiple JOIN rows for each podcast if they had multiple tags
+    def reduce_by_tag(feeds: dict[str, PAFeed], current_feed: PAFeed):
+        if current_feed.id not in feeds:
+            if current_feed.tag is not None:
+                current_feed.tags.append(current_feed.tag)
+            feeds[current_feed.id] = current_feed
+        elif current_feed.tag is not None:
+            existing_feed: PAFeed = feeds[current_feed.id]
+            existing_feed.tags.append(current_feed.tag)
+        return feeds
+
+    pa_feeds_dict = functools.reduce(reduce_by_tag, pa_feeds_one_to_many_tags, dict())
+    pa_feeds = pa_feeds_dict.values()
+
+    pa_tags: dict[int, str] = dict(podcast_addict_cur.execute('SELECT _id, name FROM tags'))
 
     print("# Podcast addict feeds:")
     for feed in pa_feeds:
         print(feed.name)
     print("\n\n")
 
-    ap_feeds = {a[5]: Feed(*a) for a in antenna_pod_cur.execute(
-            'select id, title, description, author, keep_updated, download_url from Feeds '
+    ap_feeds = {a[5]: APFeed(*a) for a in antenna_pod_cur.execute(
+            'select id, title, description, author, keep_updated, download_url, tags from Feeds '
             )}
 
     pa_to_ap = []
@@ -113,13 +155,13 @@ def transfer(podcast_addict_cur: Cursor, antenna_pod_cur: Cursor):
     #            # FIXME: make it work if premium and non-premium share same name
     #            if ap.name == "Name of same podcast but premium version":
     #                transfer_from_feed_to_feed(podcast_addict_cur,
-    #                                           antenna_pod_cur, pa, ap)
+    #                                           antenna_pod_cur, pa, ap, pa_tags)
     #                break
     #        break
 
 
     for pa, ap in pa_to_ap:
-        transfer_from_feed_to_feed(podcast_addict_cur, antenna_pod_cur, pa, ap)
+        transfer_from_feed_to_feed(podcast_addict_cur, antenna_pod_cur, pa, ap, pa_tags)
         print()  # break
 
 
@@ -130,8 +172,9 @@ ITEM_MATCHER.lock_in_if_similarity_first_above = 0.97
 
 def transfer_from_feed_to_feed(podcast_addict_cur: Cursor,  #
                                antenna_pod_cur: Cursor,  #
-                               pa: Feed,  #
-                               ap: Feed):
+                               pa: PAFeed,  #
+                               ap: APFeed,
+                               pa_tags: dict[int, str]):
     print(f'# Feed: {ap.name}')
     antenna_pod_cur.execute("UPDATE Feeds "
                             "SET keep_updated = ? "
@@ -159,6 +202,13 @@ def transfer_from_feed_to_feed(podcast_addict_cur: Cursor,  #
     print(f"\nRough estimate: {combinations / 4000:.2f} seconds\n\n")
     pa_indices = ITEM_MATCHER.get_indices(ap_episodes, pa_episodes)
     seen_match_count = 0
+
+    # Transfer tags, merge any existing tags with PA tags
+    ap.tags = list(set(ap.tags).union(pa.tag_names(pa_tags)))
+    antenna_pod_cur.execute("UPDATE Feeds "
+                            "SET tags = ? "
+                            "WHERE id = ?",  #
+                            (ap.tags_str, ap.id,))
 
 
     for ap_ep, pa_idx in zip(ap_episodes, pa_indices):

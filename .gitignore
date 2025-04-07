@@ -127,3 +127,11 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+# PyCharm / JetBrains IDEs
+/.idea
+
+# pa_to_ap specific stuff
+/podcast_addict_extracted
+/*.db
+/*.backup

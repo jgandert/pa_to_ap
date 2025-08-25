@@ -31,7 +31,7 @@ MATCH_ON_EPISODE_URL_IF_COULD_NOT_FIND_A_MATCH_OTHERWISE = True
 4. Put them in the same folder as this script
 5. Run the [`pa_to_ap.py`](pa_to_ap.py) script (AntennaPod db file will be **modified**!) in a terminal
 6. Confirm that matches are correct (if they aren't you may need to increase `min_similarity`)
-7. Copy the modified db file back to your phone
+7. Copy the modified `.db` file (the one that you put in the folder) back to your phone
 8. If you chose to enable `TRANSFER_DOWNLOADED_EPISODES` (this is on by default):
     1. Create `/storage/emulated/0/Android/data/de.danoeh.antennapod/files/media/from_podcast_addict` 
     2. Manually move (or copy) the folders **inside**
